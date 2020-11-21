@@ -1,0 +1,216 @@
+import Vue from 'vue'
+
+import Vuex from 'vuex'
+import {auth,usersCollection,postsCollection,commentsCollection,likesCollection}  from '../firebase'
+import { currentUser } from '../plugins/currentUser'
+import router from '../router/index'
+
+import VuexORM from '@vuex-orm/core'
+import {Profile,Post,Comment} from '@/models';
+
+
+Vue.use(Vuex)
+
+// Create a new instance of Database.
+const database = new VuexORM.Database();
+
+
+
+// Register Models to Database.
+database.register(Profile)
+database.register(Post)
+database.register(Comment)
+
+
+
+// realtime firebase
+// fb.postsCollection.orderBy('createdOn', 'desc').onSnapshot(snapshot => {
+//   let postsArray = []
+
+//   snapshot.forEach(doc => {
+//     let post = doc.data()
+//     post.id = doc.id
+
+//     postsArray.push(post)
+//   })
+
+//   store.commit('setPosts', postsArray)
+// })
+
+// realtime firebase
+// fb.usersCollection.onSnapshot(snapshot => {
+//   let postsArray = []
+
+//   snapshot.forEach(doc => {
+//     let post = doc.data()
+//     post.id = doc.id
+
+//     postsArray.push(post)
+//   })
+
+//   store.commit('setUsers', postsArray)
+// })
+
+
+
+const store = new Vuex.Store({
+  plugins: [VuexORM.install(database)],
+  state: {
+    userProfile: {},
+    posts: [],
+    users:[],
+  },
+  mutations: {
+    setUserProfile(state, val) {
+     
+      (currentUser as any).user = val;
+      state.userProfile = val
+    },
+    updateProfileThumb(state,src){
+      let p:any = state.userProfile
+      p.thumb = src;
+
+    },
+    setPerformingRequest(state, val) {
+      (state as any).performingRequest = val
+    },
+    setPosts(state, val) {
+      state.posts = val
+    },
+    setUsers(state, val) {
+      state.users = val
+    }
+  },
+  actions: {
+    async login({ dispatch }, form) {
+      // sign user in
+      const { user } = await auth.signInWithEmailAndPassword(form.email, form.password)
+
+     console.log(user?.providerData[0]);
+     
+      // dispatch('fetchUserProfile', user)
+    },
+    async signup({ commit }, form) {
+      // sign user up
+      const { user } = await auth.createUserWithEmailAndPassword(form.email, form.password)
+
+     
+
+     
+if (user) {
+  let data = {
+    name: form.name,
+    title: form.title,
+    bloodGroup: '',
+        thumb: '',
+        userId:user.uid,
+    editor:false,
+    active:false
+  }
+await  Profile.api().create(user , data );
+
+
+
+}
+ 
+
+
+
+      
+    },
+    async fetchUserProfile({ commit }, user) {
+    //  console.log({user});
+      // fetch user profile
+      const userProfile = await usersCollection.doc(user.uid).get()
+
+    await  Profile.insert({data:{...userProfile.data(),id:user.uid}})
+
+    
+    
+
+      // set user profile in state
+      commit('setUserProfile', Profile.find(user.uid))
+     // console.log(userProfile.data());
+
+      // change route to dashboard
+      if (router.currentRoute.path === '/login') {
+        router.push('/')
+      }
+    },
+    async logout({ commit }) {
+      // log user out
+      await auth.signOut()
+
+      // clear user data from state
+      commit('setUserProfile', {})
+
+      // redirect to login view
+      router.push('/login')
+    },
+    async createPost({ state, commit }, post) {
+      // create post in firebase
+      await postsCollection.add({
+        createdOn: new Date(),
+        content: post.content,
+        userId: (auth as any).currentUser.uid,
+        userName: (state as any).userProfile.name,
+        comments: 0,
+        likes: 0
+      })
+
+    },
+    async likePost ({ commit }, post) {
+      const userId = (auth as any).currentUser.uid as any;
+      const docId = `${userId}_${post.id}`
+
+      // check if user has liked post
+      const doc = await likesCollection.doc(docId).get()
+      if (doc.exists) { return }
+
+      // create post
+      await likesCollection.doc(docId).set({
+        postId: post.id,
+        userId: userId
+      })
+
+      // update post likes count
+      postsCollection.doc(post.id).update({
+        likes: post.likesCount + 1
+      })
+    },
+    async updateProfile({ dispatch }, user) {
+      const userId = (auth as any).currentUser.uid as any;
+      // update user object
+      const userRef = await usersCollection.doc(userId).update({
+        name: user.name,
+        title: user.title,
+        bloodGroup:user.bloodGroup,
+        thumb:user.thumb
+      })
+
+      dispatch('fetchUserProfile', { uid: userId })
+     
+
+      // update all posts by user
+      const postDocs = await postsCollection.where('userId', '==', userId).get()
+      postDocs.forEach(doc => {
+        postsCollection.doc(doc.id).update({
+          userName: user.name
+        })
+      })
+
+      // update all comments by user
+      const commentDocs = await commentsCollection.where('userId', '==', userId).get()
+      commentDocs.forEach(doc => {
+        commentsCollection.doc(doc.id).update({
+          userName: user.name
+        })
+      })
+
+       // redirect to login view
+       router.push('/')
+    }
+  }
+})
+
+export default store
